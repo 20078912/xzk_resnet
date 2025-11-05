@@ -1,21 +1,21 @@
 # COMP9517 Computer Vision Group Project (2025 T3)
 
 ```
-project_root/
+COMP9517_group_project/
 │
-├─ data.yaml                      # 你的数据路径 & 类别定义
+├─ data.yaml                        # 数据集配置文件（见下方示例）
 │
-├─ retinanet_train.py            # 主训练脚本（已支持 YOLO txt）
-├─ retina_yaml_train.py          # 读取 data.yaml 开训练
-├─ retina_yaml_eval.py           # 读取 data.yaml 做验证/测试
-├─ infer_yolo_txt.py             # (test无标注时) 推理导出预测
+├─ retinanet_train.py               # 主训练脚本（当前使用的即可）
+├─ retinanet_test.py                # 测试脚本（当前使用的即可）
+├─ visualize_retinanet.py           # 可视化脚本（生成 success/failure 图）
 │
-├─ outputs_retinanet/            # 自动生成 (权重/日志/ckpt)
+├─ outputs_retinanet/               # 模型输出文件夹
 │    ├─ best.pth
-│    ├─ train_*.log
-│    └─ …
+│    ├─ ckpt_epochX.pth
+│    ├─ results_summary.csv
+│    └─ ...
 │
-└─ dataset/                      
+└─ dataset/
      ├─ train/
      │   ├─ images/
      │   └─ labels/
@@ -24,7 +24,8 @@ project_root/
      │   └─ labels/
      └─ test/
          ├─ images/
-         └─ labels/    
+         └─ labels/
+
 ```       
 
 ## 🪲 Insect Detection & Classification in Agriculture  
