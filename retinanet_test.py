@@ -1,4 +1,4 @@
-# test_retinanet.py  — final Test 评估（不改训练文件）
+# test_retinanet.py — final Test 评估（不改训练文件）
 import argparse, time, numpy as np, torch, torch.utils.data as data, torchvision as tv
 from sklearn.metrics import precision_recall_fscore_support, accuracy_score, roc_auc_score
 from torchvision.ops import box_iou
@@ -10,7 +10,7 @@ from retinanet_train import (
 def load_state_dict_safely(path):
     """兼容两种保存：纯 state_dict 或 {'model': state_dict, ...}"""
     try:
-        sd = torch.load(path, map_location='cpu', weights_only=True)  # 新版更安全
+        sd = torch.load(path, map_location='cpu', weights_only=True)  # torch>=2.4
         if isinstance(sd, dict) and any(k.startswith('head') or 'backbone' in k for k in sd.keys()):
             return sd
     except TypeError:
@@ -20,7 +20,7 @@ def load_state_dict_safely(path):
 
 def match_tp_pairs(pred, gt, iou_thr=0.5):
     """
-    贪心匹配 TP：按分数高到低遍历预测，和尚未匹配的 GT 做 IoU 最大匹配。
+    贪心匹配 TP:按分数高到低遍历预测,和尚未匹配的 GT 做 IoU 最大匹配。
     返回：列表[(gt_label, pred_label, pred_score)]
     """
     pb, ps, pl = pred["boxes"], pred["scores"], pred["labels"]
@@ -51,7 +51,8 @@ def main():
     ap.add_argument('--batch-size', type=int, default=2)
     ap.add_argument('--short-side', type=int, default=800)
     ap.add_argument('--max-size', type=int, default=1333)
-    ap.add_argument('--score-thresh', type=float, default=0.05)  # 视需要调 0.0~0.5
+    ap.add_argument('--score-thresh', type=float, default=0.05)  # 可调 0.0~0.5
+    ap.add_argument('--iou-thr', type=float, default=0.5)       # 统一 IoU 阈值
     args = ap.parse_args()
 
     set_seed(42)
@@ -72,11 +73,12 @@ def main():
     state = load_state_dict_safely(args.ckpt)
     model.load_state_dict(state, strict=False)
     model.eval()
-    # 调分数阈值（RetinaNet postprocess）
+    # 调分数阈值（RetinaNet 的后处理）
+    # torchvision 0.20 的 RetinaNet 暴露 model.score_thresh
     if hasattr(model, "score_thresh"):
-        model.score_thresh = args.score_thres h
+        model.score_thresh = float(args.score_thresh)
     elif hasattr(model, "head") and hasattr(model.head, "score_thresh"):
-        model.head.score_thresh = args.score_thresh  # 以防不同版本
+        model.head.score_thresh = float(args.score_thresh)
 
     # === forward (collect preds / gts) ===
     all_preds, all_gts = [], []
@@ -98,13 +100,13 @@ def main():
     test_time = time.time() - t0
 
     # === detection metric: mAP@0.5 ===
-    det = compute_map50(all_preds, all_gts, iou_thr=0.5, num_classes=args.num_classes)
+    det = compute_map50(all_preds, all_gts, iou_thr=args.iou_thr, num_classes=args.num_classes)
     mAP50 = det["mAP50"]
 
     # === classification metrics on matched TP pairs ===
     y_true, y_pred, score_rows = [], [], []
     for p, g in zip(all_preds, all_gts):
-        pairs = match_tp_pairs(p, g, iou_thr=0.5)
+        pairs = match_tp_pairs(p, g, iou_thr=args.iou_thr)
         for gt_lab, pr_lab, pr_score in pairs:
             y_true.append(gt_lab)
             y_pred.append(pr_lab)
@@ -114,7 +116,8 @@ def main():
             score_rows.append(row)
 
     if len(y_true) == 0:
-        P = R = F1 = ACC = AUC = 0.0
+        P = R = F1 = ACC = 0.0
+        AUC = float('nan')
     else:
         P, R, F1, _ = precision_recall_fscore_support(
             y_true, y_pred, average="macro", zero_division=0
@@ -129,13 +132,13 @@ def main():
 
     # === print ===
     print("\n=== TEST RESULTS ===")
-    print(f"mAP@0.5: {mAP50:.4f}")
+    print(f"mAP@{args.iou_thr:.2f}:     {mAP50:.4f}")
     print(f"Precision (macro): {P:.4f}")
     print(f"Recall    (macro): {R:.4f}")
     print(f"F1        (macro): {F1:.4f}")
-    print(f"Accuracy           {ACC:.4f}")
-    print(f"ROC-AUC (ovr)      {AUC:.4f}")
-    print(f"Eval time          {test_time:.2f}s\n")
+    print(f"Accuracy:          {ACC:.4f}")
+    print(f"ROC-AUC (ovr):     {AUC:.4f}")
+    print(f"Eval time:         {test_time:.2f}s\n")
 
 if __name__ == "__main__":
     main()

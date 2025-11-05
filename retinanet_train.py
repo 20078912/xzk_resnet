@@ -453,36 +453,77 @@ def main():
     if args.amp and device.type == 'cuda':
         scaler = GradScaler('cuda')
 
-    start_epoch=0
+    start_epoch = 0
     if args.resume and os.path.isfile(args.resume):
-        ckpt = torch.load(args.resume, map_location='cpu')
-        model.load_state_dict(ckpt['model'])
-        optimizer.load_state_dict(ckpt['optimizer'])
-        lr_sched.load_state_dict(ckpt['lr_sched'])
-        start_epoch = ckpt['epoch']+1
+        # 显式标明 weights_only=False 以消除未来默认值变化的歧义
+        ckpt = torch.load(args.resume, map_location='cpu', weights_only=False)
+
+        # 1) 恢复模型 & 优化器
+        model.load_state_dict(ckpt['model'], strict=False)
+        if 'optimizer' in ckpt:
+            optimizer.load_state_dict(ckpt['optimizer'])
+
+        # 2) 尝试用 ckpt 的配置重建同类调度器，再加载 state；失败则跳过
+        ckpt_args = ckpt.get('args', {})
+        # 以 ckpt 为准回建调度器类型（是否 cosine 与 warmup）
+        cosine_ckpt = bool(ckpt_args.get('cosine', False))
+        warmup_ckpt = int(ckpt_args.get('warmup_epochs', 0))
+        epochs_ckpt = int(ckpt_args.get('epochs', args.epochs))
+
+        try:
+            # 用 ckpt 的配置重建
+            lr_sched = build_scheduler(optimizer,
+                                       epochs=epochs_ckpt,
+                                       cosine=cosine_ckpt,
+                                       warmup_epochs=warmup_ckpt)
+            if 'lr_sched' in ckpt:
+                lr_sched.load_state_dict(ckpt['lr_sched'])
+        except Exception as e:
+            print(f"[warn] LR scheduler state mismatch: {e}\n"
+                  f"       Reinitializing scheduler with current args (no state loaded).")
+            lr_sched = build_scheduler(optimizer,
+                                       epochs=args.epochs,
+                                       cosine=args.cosine,
+                                       warmup_epochs=args.warmup_epochs)
+
+        start_epoch = int(ckpt.get('epoch', -1)) + 1
         print(f"Resumed from {args.resume} at epoch {start_epoch}")
 
-    # train loop
-    best_map=-1.0; best_path=None
+    # =========================
+    # Train loop
+    # =========================
+    best_map = -1.0
+    best_path = None
     for epoch in range(start_epoch, args.epochs):
         loss_avg, train_time = train_one_epoch(
             model, train_loader, optimizer, device, epoch,
             grad_accum=args.grad_accum, lr_scheduler=lr_sched,
-            amp=(args.amp and device.type=='cuda'), scaler=scaler
+            amp=(args.amp and device.type == 'cuda'), scaler=scaler
         )
         metrics, eval_time = evaluate_map50(model, val_loader, device, num_classes=args.num_classes)
         print(f"[epoch {epoch}] loss={loss_avg:.4f}  mAP50={metrics['mAP50']:.4f}  (train {train_time:.1f}s, eval {eval_time:.1f}s)")
-        ckpt = {"epoch": epoch, "model": model.state_dict(), "optimizer": optimizer.state_dict(),
-                "lr_sched": lr_sched.state_dict(), "args": vars(args), "mAP50": metrics["mAP50"]}
+
+        ckpt = {
+            "epoch": epoch,
+            "model": model.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "lr_sched": lr_sched.state_dict(),
+            "args": vars(args),
+            "mAP50": metrics["mAP50"]
+        }
         path = os.path.join(args.out_dir, f"ckpt_epoch{epoch}_map50_{metrics['mAP50']:.4f}.pth")
         torch.save(ckpt, path)
         if metrics["mAP50"] > best_map:
-            best_map = metrics["mAP50"]; best_path = os.path.join(args.out_dir, "best.pth")
-            torch.save(ckpt, best_path); print(f"** Saved best to {best_path}")
-        # scheduler step moved here (per-epoch)
+            best_map = metrics["mAP50"]
+            best_path = os.path.join(args.out_dir, "best.pth")
+            torch.save(ckpt, best_path)
+            print(f"** Saved best to {best_path}")
+
         if lr_sched is not None:
             lr_sched.step()
+
     print(f"Training done. Best mAP50={best_map:.4f}, best ckpt={best_path}")
+
 
 if __name__ == "__main__":
     main()
