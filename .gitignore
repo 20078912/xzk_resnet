@@ -1,0 +1,19 @@
+# Ignore datasets
+dataset/
+sample/
+
+# Training outputs / logs / checkpoints
+outputs_retinanet/
+others/
+*.log
+*.pth
+*.pt
+
+# VSCode settings
+.vscode/
+
+# Python cache
+__pycache__/
+*.pyc
+
+25T39517-proj/
