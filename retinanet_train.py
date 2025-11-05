@@ -1,14 +1,14 @@
 # retinanet_train.py
 import argparse, os, time, random
 from pathlib import Path
-from typing import List, Dict
+from typing import List, Dict, Optional
 import numpy as np
 
 import torch
 import torch.utils.data as data
 import torchvision as tv
 from torchvision.ops import box_iou
-from torchvision.models.detection import RetinaNet_ResNet50_FPN_V2_Weights
+from torch.amp import autocast, GradScaler
 
 # =========================
 # Repro
@@ -30,7 +30,7 @@ def clamp_boxes(boxes, w, h):
     return boxes
 
 # =========================
-# Wrap Transform (Windows-safe)
+# Wrap Transform
 # =========================
 class WrapTransformDataset(torch.utils.data.Dataset):
     def __init__(self, base, transform=None):
@@ -80,9 +80,11 @@ class CocoWrapper(data.Dataset):
         w,h = img.size
         boxes=[]; labels=[]
         for a in anns:
-            if a.get("iscrowd",0)==1: continue
+            if a.get("iscrowd",0)==1: 
+                continue
             x,y,bw,bh = a["bbox"]
-            if bw<=1 or bh<=1: continue
+            if bw<=1 or bh<=1: 
+                continue
             boxes.append([x,y,x+bw,y+bh])
             labels.append(self.cat_id_to_contig.get(a["category_id"], 0))
         if len(boxes)==0:
@@ -99,50 +101,65 @@ class CocoWrapper(data.Dataset):
 # =========================
 # YOLO .txt wrapper
 # =========================
+from PIL import Image as PILImage  # ✅ 放在这里或文件顶部
+
 class YoloTxtWrapper(data.Dataset):
     """
     Expect:
       images_dir/  *.jpg|*.png
-      labels_dir/  same-stem .txt => <cls> <cx> <cy> <w> <h>  (normalized 0..1)
+      labels_dir/  same-stem .txt => <cls> <cx> <cy> <w> <h>  (normalized 0..1), class is 0-based
     """
-    def __init__(self, images_dir, labels_dir, transforms=None, num_classes=None):
-        from PIL import Image
-        self.img_root = Path(images_dir); self.labels_dir = Path(labels_dir)
-        self.transforms = transforms; self.Image = Image
+    def __init__(self, images_dir, labels_dir, transforms=None, num_classes: Optional[int]=None):
+        self.img_root = Path(images_dir)
+        self.labels_dir = Path(labels_dir)
+        self.transforms = transforms                 # ✅ 必须保留
         self.num_classes = num_classes
+
         exts = {".jpg",".jpeg",".png",".bmp",".webp"}
-        self.img_paths = sorted([p for p in self.img_root.iterdir() if p.suffix.lower() in exts])
+        self.img_paths = sorted([p for p in self.img_root.iterdir()
+                                 if p.suffix.lower() in exts])
 
-    def __len__(self): return len(self.img_paths)
+    def __len__(self):
+        return len(self.img_paths)
 
-    def _yolo_to_xyxy(self, w, h, cx, cy, bw, bh):
+    @staticmethod
+    def _yolo_to_xyxy(w, h, cx, cy, bw, bh):
         x1 = (cx - bw/2)*w; y1 = (cy - bh/2)*h
         x2 = (cx + bw/2)*w; y2 = (cy + bh/2)*h
         return [x1, y1, x2, y2]
 
     def __getitem__(self, idx):
         img_path = self.img_paths[idx]
-        img = self.Image.open(img_path).convert("RGB")
-        w,h = img.size
+        img = PILImage.open(img_path).convert("RGB")  # ✅ 改这里
+        w, h = img.size
+
         txt_path = self.labels_dir / f"{img_path.stem}.txt"
         boxes=[]; labels=[]
         if txt_path.exists():
-            for line in open(txt_path,encoding="utf-8"):
-                parts=line.strip().split()
-                if len(parts)!=5: continue
-                c,cx,cy,bw,bh = map(float, parts); c=int(c)
-                if (self.num_classes is not None) and (c<0 or c>=self.num_classes):
-                    continue
-                boxes.append(self._yolo_to_xyxy(w,h,cx,cy,bw,bh)); labels.append(c)
-        if len(boxes)==0:
-            boxes=torch.zeros((0,4),dtype=torch.float32); labels=torch.zeros((0,),dtype=torch.int64)
+            with open(txt_path, encoding="utf-8") as f:
+                for line in f:
+                    parts = line.strip().split()
+                    if len(parts) != 5:
+                        continue
+                    c,cx,cy,bw,bh = map(float, parts); c = int(c)
+                    if (self.num_classes is not None) and (c < 0 or c >= self.num_classes):
+                        continue
+                    boxes.append(self._yolo_to_xyxy(w, h, cx, cy, bw, bh))
+                    labels.append(c)
+
+        if len(boxes) == 0:
+            boxes = torch.zeros((0,4), dtype=torch.float32)
+            labels = torch.zeros((0,), dtype=torch.int64)
         else:
-            boxes=clamp_boxes(torch.tensor(boxes,dtype=torch.float32), w, h)
-            labels=torch.tensor(labels,dtype=torch.int64)
+            boxes = clamp_boxes(torch.tensor(boxes, dtype=torch.float32), w, h)
+            labels = torch.tensor(labels, dtype=torch.int64)
+
         img_t = tv.transforms.functional.to_tensor(img)
         if self.transforms is not None:
             img_t = self.transforms(img_t)
+
         return img_t, {"boxes": boxes, "labels": labels, "size": torch.tensor([h,w])}
+
 
 # =========================
 # Resize (Tensor)
@@ -172,7 +189,8 @@ def compute_map50(preds: List[Dict], gts: List[Dict], iou_thr=0.5, num_classes=1
         cls_preds=[]; cls_gts=[]
         for p,g in zip(preds,gts):
             pm = (p["labels"]==cls); gm = (g["labels"]==cls)
-            if pm.sum()==0 and gm.sum()==0: continue
+            if pm.sum()==0 and gm.sum()==0: 
+                continue
             cls_preds.append({"boxes":p["boxes"][pm], "scores":p["scores"][pm]})
             cls_gts.append({"boxes":g["boxes"][gm]})
         flat=[]
@@ -189,7 +207,9 @@ def compute_map50(preds: List[Dict], gts: List[Dict], iou_thr=0.5, num_classes=1
                 matched[i].add(j); tp.append(1); fp.append(0)
             else:
                 fp.append(1); tp.append(0)
-        if total==0: ap_per_class[cls]=0.0; continue
+        if total==0: 
+            ap_per_class[cls]=0.0; 
+            continue
         tp=np.cumsum(np.array(tp)); fp=np.cumsum(np.array(fp))
         rec=tp/(total+eps); prec=tp/(tp+fp+eps)
         ap=0.0
@@ -200,48 +220,75 @@ def compute_map50(preds: List[Dict], gts: List[Dict], iou_thr=0.5, num_classes=1
     return {"AP50_per_class": ap_per_class, "mAP50": mAP}
 
 # =========================
-# Build RetinaNet (with COCO pretrained)
+# Build RetinaNet (ImageNet backbone, no COCO head)
 # =========================
-def build_retinanet(num_classes=12, min_anchor=16, aspect_ratios=(0.5,1.0,2.0),
+def build_retinanet(num_classes=12, min_anchor=16, aspect_ratios=(0.5, 1.0, 2.0),
                     focal_gamma=2.0, focal_alpha=0.25):
+    from torchvision.models import ResNet50_Weights
+    # torchvision 0.20+: retinanet_resnet50_fpn_v2 支持 weights_backbone
     try:
-        weights = RetinaNet_ResNet50_FPN_V2_Weights.DEFAULT
         model = tv.models.detection.retinanet_resnet50_fpn_v2(
-            weights=weights, num_classes=num_classes
+            weights=None,  # 不加载 COCO 检测头（否则会强制 91 类）
+            weights_backbone=ResNet50_Weights.IMAGENET1K_V1,
+            num_classes=num_classes,
         )
     except Exception:
+        # 兼容旧版 API
         model = tv.models.detection.retinanet_resnet50_fpn(
-            weights="DEFAULT", num_classes=num_classes
+            weights=None,
+            weights_backbone=ResNet50_Weights.IMAGENET1K_V1,
+            num_classes=num_classes,
         )
-    # anchors
-    sizes=[]; s=min_anchor
+
+    # anchors：更小的起始尺度更友好（昆虫/小目标）
+    sizes = []
+    s = min_anchor
     for _ in range(5):
-        sizes.append((s,)); s*=2
+        sizes.append((s,))
+        s *= 2
     if hasattr(model, "anchor_generator"):
         model.anchor_generator.sizes = tuple(sizes)
-        model.anchor_generator.aspect_ratios = tuple([aspect_ratios]*5)
-    # focal params (if exposed)
-    ch = getattr(getattr(model,"head",None), "classification_head", None)
-    if ch is not None:
-        if hasattr(ch,"gamma"): ch.gamma = focal_gamma
-        if hasattr(ch,"alpha"): ch.alpha = focal_alpha
+        model.anchor_generator.aspect_ratios = tuple([aspect_ratios] * 5)
+
+    # focal loss 参数（如果暴露）
+    if hasattr(model, "head") and hasattr(model.head, "classification_head"):
+        ch = model.head.classification_head
+        if hasattr(ch, "gamma"):
+            ch.gamma = focal_gamma
+        if hasattr(ch, "alpha"):
+            ch.alpha = focal_alpha
     return model
 
 # =========================
 # Train / Eval
 # =========================
-def train_one_epoch(model, loader, optimizer, device, epoch, grad_accum=1, lr_scheduler=None, log_interval=20):
+def train_one_epoch(model, loader, optimizer, device, epoch,
+                    grad_accum=1, lr_scheduler=None, log_interval=20,
+                    amp=False, scaler: Optional[GradScaler] = None):
     model.train(); loss_meter=0.0; t0=time.time()
     for it,(images,targets) in enumerate(loader,1):
         images=[img.to(device) for img in images]
         targets=[{k:v.to(device) for k,v in t.items()} for t in targets]
-        loss_dict = model(images, targets)
-        loss = sum(loss_dict.values()) / grad_accum
-        loss.backward()
-        if it % grad_accum == 0:
-            optimizer.step(); optimizer.zero_grad(set_to_none=True)
-            if lr_scheduler is not None: lr_scheduler.step()
-        loss_meter += loss.item()*grad_accum
+
+        if amp:
+            with autocast('cuda'):
+
+                loss_dict = model(images, targets)
+                loss = sum(loss_dict.values()) / grad_accum
+            scaler.scale(loss).backward()
+            if it % grad_accum == 0:
+                scaler.step(optimizer); scaler.update()
+                optimizer.zero_grad(set_to_none=True)
+
+        else:
+            loss_dict = model(images, targets)
+            loss = sum(loss_dict.values()) / grad_accum
+            loss.backward()
+            if it % grad_accum == 0:
+                optimizer.step(); optimizer.zero_grad(set_to_none=True)
+
+
+        loss_meter += float(loss.item())*grad_accum
         if it % log_interval==0:
             print(f"[epoch {epoch} iter {it}/{len(loader)}] loss={loss_meter/it:.4f}")
     return loss_meter/max(1,len(loader)), time.time()-t0
@@ -260,6 +307,22 @@ def evaluate_map50(model, loader, device, num_classes):
     metrics = compute_map50(all_preds, all_gts, iou_thr=0.5, num_classes=num_classes)
     return metrics, time.time()-t0
 
+def build_scheduler(optimizer, epochs, cosine=False, warmup_epochs=0):
+    if not cosine:
+        milestones = [int(epochs*0.66), int(epochs*0.86)]
+        return torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=milestones, gamma=0.1)
+    # Cosine 带 Warmup
+    main_sched = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(1, epochs-warmup_epochs))
+    if warmup_epochs <= 0:
+        return main_sched
+    def warmup_lambda(cur_epoch):
+        if cur_epoch >= warmup_epochs:
+            return 1.0
+        return (cur_epoch + 1) / float(warmup_epochs)
+    warmup_sched = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=warmup_lambda)
+    return torch.optim.lr_scheduler.SequentialLR(optimizer, schedulers=[warmup_sched, main_sched],
+                                                milestones=[warmup_epochs])
+
 # =========================
 # Main
 # =========================
@@ -268,15 +331,15 @@ def main():
     # dataset mode
     parser.add_argument('--synthetic', action='store_true')
     parser.add_argument('--yolo-txt', action='store_true')
-    # yolo: split paths
+
+    # yolo split paths
     parser.add_argument('--train-images', type=str, default='')
     parser.add_argument('--train-labels', type=str, default='')
     parser.add_argument('--val-images',   type=str, default='')
     parser.add_argument('--val-labels',   type=str, default='')
-    # yolo: fallback (same dir for smoke)
-    parser.add_argument('--data-root', type=str, default='')
-    parser.add_argument('--labels-dir', type=str, default='')
+
     # coco paths
+    parser.add_argument('--data-root', type=str, default='')
     parser.add_argument('--train-json', type=str, default='')
     parser.add_argument('--val-json', type=str, default='')
 
@@ -292,15 +355,20 @@ def main():
     parser.add_argument('--min-anchor', type=int, default=16)
     parser.add_argument('--focal-gamma', type=float, default=2.0)
     parser.add_argument('--focal-alpha', type=float, default=0.25)
+    parser.add_argument('--grad-accum', type=int, default=1)
     parser.add_argument('--workers', type=int, default=0)
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
     parser.add_argument('--out-dir', type=str, default='outputs_retinanet')
     parser.add_argument('--resume', type=str, default='')
-    parser.add_argument('--grad-accum', type=int, default=1)
 
     # eval-only
     parser.add_argument('--eval-only', action='store_true', help='only evaluate on val loader and exit')
     parser.add_argument('--ckpt', type=str, default='', help='checkpoint for --eval-only')
+
+    # optional speed/accuracy goodies
+    parser.add_argument('--amp', action='store_true', help='mixed precision training (CUDA only)')
+    parser.add_argument('--cosine', action='store_true', help='use cosine LR schedule')
+    parser.add_argument('--warmup-epochs', type=int, default=0, help='warmup epochs for cosine')
 
     args = parser.parse_args()
     set_seed(42)
@@ -317,23 +385,30 @@ def main():
     else:
         resize = ResizeShortSide(args.short_side, args.max_size)
         if args.yolo_txt:
-            if args.train_images and args.train_labels and args.val_images and args.val_labels:
-                train_ds = YoloTxtWrapper(args.train_images, args.train_labels,
-                                          transforms=tv.transforms.Compose([resize, train_aug]),
-                                          num_classes=args.num_classes)
-                val_ds   = YoloTxtWrapper(args.val_images, args.val_labels,
-                                          transforms=tv.transforms.Compose([resize]),
-                                          num_classes=args.num_classes)
+            if args.eval_only:
+                assert args.val_images and args.val_labels, \
+                    "YOLO eval-only: set --val-images and --val-labels (test 可当作 val 使用)"
+                train_ds = None
+                val_ds = YoloTxtWrapper(
+                    args.val_images, args.val_labels,
+                    transforms=tv.transforms.Compose([resize]),
+                    num_classes=args.num_classes
+                )
             else:
-                assert args.data_root and args.labels_dir, \
-                    "YOLO mode: set --train-images/--train-labels/--val-images/--val-labels, or fallback to --data-root & --labels-dir."
-                train_ds = YoloTxtWrapper(args.data_root, args.labels_dir,
-                                          transforms=tv.transforms.Compose([resize, train_aug]),
-                                          num_classes=args.num_classes)
-                val_ds   = YoloTxtWrapper(args.data_root, args.labels_dir,
-                                          transforms=tv.transforms.Compose([resize]),
-                                          num_classes=args.num_classes)
+                assert args.train_images and args.train_labels and args.val_images and args.val_labels, \
+                    "YOLO train: set --train-images/--train-labels and --val-images/--val-labels"
+                train_ds = YoloTxtWrapper(
+                    args.train_images, args.train_labels,
+                    transforms=tv.transforms.Compose([resize, train_aug]),
+                    num_classes=args.num_classes
+                )
+                val_ds = YoloTxtWrapper(
+                    args.val_images, args.val_labels,
+                    transforms=tv.transforms.Compose([resize]),
+                    num_classes=args.num_classes
+                )
         else:
+            # COCO 模式
             assert args.data_root and args.train_json and args.val_json, \
                 "COCO mode: set --data-root --train-json --val-json."
             train_ds = CocoWrapper(args.data_root, args.train_json,
@@ -341,10 +416,17 @@ def main():
             val_ds   = CocoWrapper(args.data_root, args.val_json,
                                    transforms=tv.transforms.Compose([resize]))
 
-    train_loader = data.DataLoader(train_ds, batch_size=args.batch_size, shuffle=True,
-                                   num_workers=args.workers, collate_fn=collate_fn, pin_memory=use_pin_memory)
-    val_loader   = data.DataLoader(val_ds,   batch_size=args.batch_size, shuffle=False,
-                                   num_workers=args.workers, collate_fn=collate_fn, pin_memory=use_pin_memory)
+    # dataloaders（val_loader 必须；train_loader 仅训练时）
+    val_loader = data.DataLoader(
+        val_ds, batch_size=args.batch_size, shuffle=False,
+        num_workers=args.workers, collate_fn=collate_fn, pin_memory=use_pin_memory
+    )
+    train_loader = None
+    if not args.eval_only and train_ds is not None:
+        train_loader = data.DataLoader(
+            train_ds, batch_size=args.batch_size, shuffle=True,
+            num_workers=args.workers, collate_fn=collate_fn, pin_memory=use_pin_memory
+        )
 
     # model
     model = build_retinanet(num_classes=args.num_classes,
@@ -365,8 +447,11 @@ def main():
     # optim & sched
     params = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.SGD(params, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
-    milestones = [int(args.epochs*0.66), int(args.epochs*0.86)]
-    lr_sched = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=milestones, gamma=0.1)
+    lr_sched = build_scheduler(optimizer, epochs=args.epochs, cosine=args.cosine, warmup_epochs=args.warmup_epochs)
+
+    scaler = None
+    if args.amp and device.type == 'cuda':
+        scaler = GradScaler('cuda')
 
     start_epoch=0
     if args.resume and os.path.isfile(args.resume):
@@ -380,8 +465,11 @@ def main():
     # train loop
     best_map=-1.0; best_path=None
     for epoch in range(start_epoch, args.epochs):
-        loss_avg, train_time = train_one_epoch(model, train_loader, optimizer, device, epoch, args.grad_accum, None)
-        lr_sched.step()
+        loss_avg, train_time = train_one_epoch(
+            model, train_loader, optimizer, device, epoch,
+            grad_accum=args.grad_accum, lr_scheduler=lr_sched,
+            amp=(args.amp and device.type=='cuda'), scaler=scaler
+        )
         metrics, eval_time = evaluate_map50(model, val_loader, device, num_classes=args.num_classes)
         print(f"[epoch {epoch}] loss={loss_avg:.4f}  mAP50={metrics['mAP50']:.4f}  (train {train_time:.1f}s, eval {eval_time:.1f}s)")
         ckpt = {"epoch": epoch, "model": model.state_dict(), "optimizer": optimizer.state_dict(),
@@ -391,6 +479,9 @@ def main():
         if metrics["mAP50"] > best_map:
             best_map = metrics["mAP50"]; best_path = os.path.join(args.out_dir, "best.pth")
             torch.save(ckpt, best_path); print(f"** Saved best to {best_path}")
+        # scheduler step moved here (per-epoch)
+        if lr_sched is not None:
+            lr_sched.step()
     print(f"Training done. Best mAP50={best_map:.4f}, best ckpt={best_path}")
 
 if __name__ == "__main__":
