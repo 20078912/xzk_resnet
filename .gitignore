@@ -1,19 +1,28 @@
-# Ignore datasets
+# Dataset folders
 dataset/
+datasets/
+data/
 sample/
 
-# Training outputs / logs / checkpoints
+# Retinanet outputs / logs / checkpoints
 outputs_retinanet/
 others/
 *.log
 *.pth
 *.pt
 
-# VSCode settings
-.vscode/
-
-# Python cache
+# Temporary & cache
 __pycache__/
 *.pyc
 
+# VSCode / IDE
+.vscode/
+.idea/
+
+# Images (prevent accidentally adding Kaggle dataset JPGs)
+*.jpg
+*.jpeg
+*.png
+
+# Scripts backup folder
 25T39517-proj/

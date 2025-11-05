@@ -1,5 +1,6 @@
 # COMP9517 Computer Vision Group Project (2025 T3)
 
+```
 project_root/
 │
 ├─ data.yaml                      # 你的数据路径 & 类别定义
@@ -23,7 +24,8 @@ project_root/
      │   └─ labels/
      └─ test/
          ├─ images/
-         └─ labels/           
+         └─ labels/    
+```       
 
 ## 🪲 Insect Detection & Classification in Agriculture  
 **Models:** RetinaNet • Faster R‑CNN • YOLO (or other CV methods your group chooses)
