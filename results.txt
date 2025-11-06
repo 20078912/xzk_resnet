@@ -1,0 +1,8 @@
+=== TEST RESULTS ===
+mAP@0.50:     0.6605
+Precision (macro): 0.8821
+Recall    (macro): 0.8834
+F1        (macro): 0.8801
+Accuracy:          0.8859
+ROC-AUC (ovr):     0.9388
+Eval time:         25.76s
