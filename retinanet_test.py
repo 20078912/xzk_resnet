@@ -1,5 +1,7 @@
-# test_retinanet.py — final Test 评估（不改训练文件）
-import argparse, time, numpy as np, torch, torch.utils.data as data, torchvision as tv
+# test_retinanet.py — final Test 评估 + 可视化增强
+import argparse, time, os, numpy as np, torch, torch.utils.data as data, torchvision as tv
+import pandas as pd
+import matplotlib.pyplot as plt
 from sklearn.metrics import precision_recall_fscore_support, accuracy_score, roc_auc_score
 from torchvision.ops import box_iou
 
@@ -7,10 +9,11 @@ from retinanet_train import (
     build_retinanet, YoloTxtWrapper, ResizeShortSide, collate_fn, set_seed, compute_map50
 )
 
+
 def load_state_dict_safely(path):
-    """兼容两种保存：纯 state_dict 或 {'model': state_dict, ...}"""
+    """兼容纯 state_dict / checkpoint 两种格式"""
     try:
-        sd = torch.load(path, map_location='cpu', weights_only=True)  # torch>=2.4
+        sd = torch.load(path, map_location='cpu', weights_only=True)
         if isinstance(sd, dict) and any(k.startswith('head') or 'backbone' in k for k in sd.keys()):
             return sd
     except TypeError:
@@ -18,17 +21,15 @@ def load_state_dict_safely(path):
     ckpt = torch.load(path, map_location='cpu')
     return ckpt.get('model', ckpt)
 
+
 def match_tp_pairs(pred, gt, iou_thr=0.5):
-    """
-    贪心匹配 TP:按分数高到低遍历预测,和尚未匹配的 GT 做 IoU 最大匹配。
-    返回：列表[(gt_label, pred_label, pred_score)]
-    """
+    """匹配预测框和真实框（贪心方式）"""
     pb, ps, pl = pred["boxes"], pred["scores"], pred["labels"]
     gb, gl = gt["boxes"], gt["labels"]
     if len(pb) == 0 or len(gb) == 0:
         return []
 
-    ious = box_iou(pb, gb)  # [Np, Ng]
+    ious = box_iou(pb, gb)
     order = torch.argsort(ps, descending=True)
     used_g = set()
     pairs = []
@@ -41,6 +42,7 @@ def match_tp_pairs(pred, gt, iou_thr=0.5):
             pairs.append((int(gl[j]), int(pl[i]), float(ps[i])))
     return pairs
 
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--ckpt', required=True)
@@ -51,14 +53,16 @@ def main():
     ap.add_argument('--batch-size', type=int, default=2)
     ap.add_argument('--short-side', type=int, default=800)
     ap.add_argument('--max-size', type=int, default=1333)
-    ap.add_argument('--score-thresh', type=float, default=0.05)  # 可调 0.0~0.5
-    ap.add_argument('--iou-thr', type=float, default=0.5)       # 统一 IoU 阈值
+    ap.add_argument('--score-thresh', type=float, default=0.05)
+    ap.add_argument('--iou-thr', type=float, default=0.5)
+    ap.add_argument('--out-dir', type=str, default='outputs_retinanet_test')
     args = ap.parse_args()
 
+    os.makedirs(args.out_dir, exist_ok=True)
     set_seed(42)
     device = torch.device(args.device)
 
-    # === dataset / loader ===
+    # === Dataset ===
     resize = ResizeShortSide(args.short_side, args.max_size)
     ds = YoloTxtWrapper(
         args.test_images, args.test_labels,
@@ -68,19 +72,15 @@ def main():
     loader = data.DataLoader(ds, batch_size=args.batch_size, shuffle=False,
                              collate_fn=collate_fn, num_workers=0)
 
-    # === model ===
+    # === Model ===
     model = build_retinanet(num_classes=args.num_classes).to(device)
     state = load_state_dict_safely(args.ckpt)
     model.load_state_dict(state, strict=False)
     model.eval()
-    # 调分数阈值（RetinaNet 的后处理）
-    # torchvision 0.20 的 RetinaNet 暴露 model.score_thresh
     if hasattr(model, "score_thresh"):
         model.score_thresh = float(args.score_thresh)
-    elif hasattr(model, "head") and hasattr(model.head, "score_thresh"):
-        model.head.score_thresh = float(args.score_thresh)
 
-    # === forward (collect preds / gts) ===
+    # === Forward ===
     all_preds, all_gts = [], []
     t0 = time.time()
     with torch.no_grad():
@@ -99,18 +99,18 @@ def main():
                 })
     test_time = time.time() - t0
 
-    # === detection metric: mAP@0.5 ===
+    # === Detection metrics ===
     det = compute_map50(all_preds, all_gts, iou_thr=args.iou_thr, num_classes=args.num_classes)
     mAP50 = det["mAP50"]
+    ap_per_class = det.get("AP50_per_class", {})
 
-    # === classification metrics on matched TP pairs ===
+    # === Classification metrics ===
     y_true, y_pred, score_rows = [], [], []
     for p, g in zip(all_preds, all_gts):
         pairs = match_tp_pairs(p, g, iou_thr=args.iou_thr)
         for gt_lab, pr_lab, pr_score in pairs:
             y_true.append(gt_lab)
             y_pred.append(pr_lab)
-            # 仅给预测类打分，其它类置 0（简化版 OVR 分数）
             row = np.zeros(args.num_classes, dtype=float)
             row[pr_lab] = pr_score
             score_rows.append(row)
@@ -130,7 +130,7 @@ def main():
         except Exception:
             AUC = float('nan')
 
-    # === print ===
+    # === Print summary ===
     print("\n=== TEST RESULTS ===")
     print(f"mAP@{args.iou_thr:.2f}:     {mAP50:.4f}")
     print(f"Precision (macro): {P:.4f}")
@@ -139,6 +139,45 @@ def main():
     print(f"Accuracy:          {ACC:.4f}")
     print(f"ROC-AUC (ovr):     {AUC:.4f}")
     print(f"Eval time:         {test_time:.2f}s\n")
+
+    # === 每类结果导出 ===
+    class_ids = list(range(args.num_classes))
+    ap_list = [ap_per_class.get(c, 0.0) for c in class_ids]
+
+    df = pd.DataFrame({
+        "class_id": class_ids,
+        "AP50": ap_list
+    })
+
+    # 如果有匹配样本，统计 per-class PRF
+    if len(y_true) > 0:
+        pcls, rcls, fcls, sup = precision_recall_fscore_support(
+            y_true, y_pred, labels=class_ids, zero_division=0
+        )
+        df["Precision"] = pcls
+        df["Recall"] = rcls
+        df["F1"] = fcls
+        df["Support"] = sup
+    else:
+        df["Precision"] = df["Recall"] = df["F1"] = 0.0
+        df["Support"] = 0
+
+    csv_path = os.path.join(args.out_dir, "class_results.csv")
+    df.to_csv(csv_path, index=False)
+    print(f"✅ Per-class results saved to {csv_path}")
+
+    # === 绘制 per-class AP 柱状图 ===
+    plt.figure(figsize=(10, 5))
+    plt.bar(df["class_id"], df["AP50"], color="skyblue")
+    plt.xlabel("Class ID"); plt.ylabel("AP@0.5")
+    plt.title("Per-Class Average Precision (AP50)")
+    plt.grid(axis='y', linestyle='--', alpha=0.6)
+    plt.xticks(df["class_id"])
+    plt.tight_layout()
+    fig_path = os.path.join(args.out_dir, "per_class_map.png")
+    plt.savefig(fig_path, dpi=300)
+    print(f"✅ Saved per-class AP plot: {fig_path}")
+
 
 if __name__ == "__main__":
     main()

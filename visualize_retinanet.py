@@ -1,15 +1,16 @@
+# visualize_retinanet.py — 预测可视化 + 成功/失败样本展示 + per-class 统计
+
 import os
+import shutil
+import csv
 import torch
 import numpy as np
-from pathlib import Path
 import matplotlib.pyplot as plt
+from pathlib import Path
+from PIL import Image
 import torchvision.transforms.functional as F
 from torchvision.utils import draw_bounding_boxes
 from torchvision.ops import nms
-from PIL import Image
-import shutil
-import csv
-
 from retinanet_train import build_retinanet, YoloTxtWrapper, ResizeShortSide, set_seed
 
 # ====================== 配置 ======================
@@ -20,8 +21,8 @@ NUM_CLASSES = 12
 OUT_DIR = "vis_results"
 CONF_THRESH = 0.2
 IOU_THR = 0.5
-PER_CLASS = 3
-MAX_BOX_PER_IMG = 5
+PER_CLASS = 3           # 每类展示多少成功/失败样本
+MAX_BOX_PER_IMG = 5     # 每张图最多画几个预测框
 
 # ====================== 类别自动检测 ======================
 def infer_class_ids(labels_dir):
@@ -145,7 +146,8 @@ def make_class_grid(class_dict, title, outfile):
             if j < len(imgs):
                 ax.imshow(imgs[j])
             ax.axis("off")
-        axes[row_idx, 0].set_ylabel(ID2NAME.get(cls_id, f"cls{cls_id}"), rotation=0, labelpad=40, fontsize=12, color="blue")
+        axes[row_idx, 0].set_ylabel(ID2NAME.get(cls_id, f"cls{cls_id}"),
+                                    rotation=0, labelpad=40, fontsize=12, color="blue")
     plt.tight_layout()
     plt.subplots_adjust(top=0.96)
     plt.savefig(outfile, dpi=200)
