@@ -88,61 +88,103 @@ failure_per_class = {i: [] for i in REAL_CLASS_IDS}
 success_count = np.zeros(NUM_CLASSES)
 total_count = np.zeros(NUM_CLASSES)
 
-for i in range(len(ds)):  # 遍历所有 test 样本
-    img, target = ds[i]
-    img_vis = (img * 255).byte()
-    img_t = img.unsqueeze(0).to(device)
+print(f"🔍 Processing {len(ds)} test images...")
 
-    with torch.no_grad():
-        preds = model(img_t)[0]
+# 清理GPU内存
+torch.cuda.empty_cache() if torch.cuda.is_available() else None
 
-    boxes, scores, labels = preds["boxes"].cpu(), preds["scores"].cpu(), preds["labels"].cpu()
-    keep = scores >= CONF_THRESH
-    boxes, scores, labels = boxes[keep], scores[keep], labels[keep]
+for i in range(len(ds)):
+    if i % 50 == 0:
+        print(f"Processing image {i}/{len(ds)}")
+    
+    try:
+        img, target = ds[i]
+        img_vis = (img * 255).byte()
+        img_t = img.unsqueeze(0).to(device)
 
-    if len(boxes) > 0:
-        nms_keep = nms(boxes, scores, iou_threshold=0.5)
-        boxes, scores, labels = boxes[nms_keep][:MAX_BOX_PER_IMG], scores[nms_keep][:MAX_BOX_PER_IMG], labels[nms_keep][:MAX_BOX_PER_IMG]
+        # 预测
+        with torch.no_grad():
+            preds = model(img_t)[0]
 
-    gtb, gtl = target["boxes"], target["labels"]
-    max_iou = 0.0
-    if len(boxes) > 0 and len(gtb) > 0:
-        ious = box_iou(boxes, gtb)
-        max_iou = ious.max().item()
-    is_success = max_iou >= IOU_THR
+        # 立即将数据移到CPU并释放GPU内存
+        boxes, scores, labels = preds["boxes"].cpu(), preds["scores"].cpu(), preds["labels"].cpu()
+        
+        # 清理GPU内存
+        del preds, img_t
+        torch.cuda.empty_cache() if torch.cuda.is_available() else None
 
-    for gt in gtl.tolist():
-        total_count[gt] += 1
-        if is_success:
-            success_count[gt] += 1
+        # 过滤低置信度预测
+        keep = scores >= CONF_THRESH
+        boxes, scores, labels = boxes[keep], scores[keep], labels[keep]
 
-    label_texts = [f"{ID2NAME.get(int(l), str(l))} {s:.2f}" for l, s in zip(labels, scores)]
-    if len(boxes) > 0:
-        drawn = draw_bounding_boxes(img_vis, boxes, labels=label_texts, colors="lime", width=2)
-    else:
-        drawn = img_vis
-    img_pil = F.to_pil_image(drawn)
+        # 验证并应用NMS
+        if len(boxes) > 0:
+            # 验证边界框有效性
+            valid_boxes = (boxes[:, 2] > boxes[:, 0]) & (boxes[:, 3] > boxes[:, 1])
+            boxes, scores, labels = boxes[valid_boxes], scores[valid_boxes], labels[valid_boxes]
+            
+            if len(boxes) > 0:
+                nms_keep = nms(boxes, scores, iou_threshold=0.5)
+                boxes, scores, labels = boxes[nms_keep][:MAX_BOX_PER_IMG], scores[nms_keep][:MAX_BOX_PER_IMG], labels[nms_keep][:MAX_BOX_PER_IMG]
 
-    fname = Path(ds.img_paths[i]).stem
-    tag = "success" if is_success else "failure"
-    img_pil.save(f"{OUT_DIR}/{tag}/{fname}.jpg")
+        # 计算IoU
+        gtb, gtl = target["boxes"], target["labels"]
+        max_iou = 0.0
+        if len(boxes) > 0 and len(gtb) > 0:
+            ious = box_iou(boxes, gtb)
+            max_iou = ious.max().item()
+        is_success = max_iou >= IOU_THR
 
-    for gt in gtl.tolist():
-        if is_success and len(success_per_class[gt]) < PER_CLASS:
-            success_per_class[gt].append(img_pil)
-        elif not is_success and len(failure_per_class[gt]) < PER_CLASS:
-            failure_per_class[gt].append(img_pil)
+        # 统计
+        for gt in gtl.tolist():
+            total_count[gt] += 1
+            if is_success:
+                success_count[gt] += 1
+
+        # 可视化
+        label_texts = [f"{ID2NAME.get(int(l), str(l))} {s:.2f}" for l, s in zip(labels, scores)]
+        if len(boxes) > 0:
+            drawn = draw_bounding_boxes(img_vis, boxes, labels=label_texts, colors="lime", width=2)
+        else:
+            drawn = img_vis
+        img_pil = F.to_pil_image(drawn)
+
+        # 保存
+        fname = Path(ds.img_paths[i]).stem
+        tag = "success" if is_success else "failure"
+        img_pil.save(f"{OUT_DIR}/{tag}/{fname}.jpg")
+
+        # 收集样本
+        for gt in gtl.tolist():
+            if is_success and len(success_per_class[gt]) < PER_CLASS:
+                success_per_class[gt].append(img_pil.copy())  # 复制避免引用问题
+            elif not is_success and len(failure_per_class[gt]) < PER_CLASS:
+                failure_per_class[gt].append(img_pil.copy())
+                
+    except Exception as e:
+        print(f"❌ Error processing image {i}: {e}")
+        continue
+
+print("✅ Inference complete!")
 
 # ====================== 拼接整合图 ======================
 def make_class_grid(class_dict, title, outfile):
-    fig, axes = plt.subplots(len(class_dict), PER_CLASS, figsize=(PER_CLASS*3, len(class_dict)*3))
+    # 过滤掉没有样本的类别
+    valid_classes = {k: v for k, v in class_dict.items() if len(v) > 0}
+    if not valid_classes:
+        print(f"⚠️ No samples for {title}, skipping...")
+        return
+        
+    fig, axes = plt.subplots(len(valid_classes), PER_CLASS, figsize=(PER_CLASS*3, len(valid_classes)*3))
     fig.suptitle(title, fontsize=16)
-    if len(class_dict) == 1:
+    
+    if len(valid_classes) == 1:
         axes = np.expand_dims(axes, 0)
-    for row_idx, cls_id in enumerate(class_dict.keys()):
-        imgs = class_dict[cls_id]
+    
+    for row_idx, cls_id in enumerate(valid_classes.keys()):
+        imgs = valid_classes[cls_id]
         for j in range(PER_CLASS):
-            ax = axes[row_idx, j] if len(class_dict) > 1 else axes[j]
+            ax = axes[row_idx, j] if len(valid_classes) > 1 else axes[j]
             if j < len(imgs):
                 ax.imshow(imgs[j])
             ax.axis("off")
