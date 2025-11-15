@@ -28,7 +28,7 @@ Eval time:       38.79s
 Saved per-class AP results → outputs_retinanet_test/class_results.csv
 Saved plot → outputs_retinanet_test/per_class_map.png
 
-🔍 Processing 546 images...
+Processing 546 images...
   0/546
   50/546
   100/546
@@ -40,12 +40,12 @@ Saved plot → outputs_retinanet_test/per_class_map.png
   400/546
   450/546
   500/546
-🎉 Inference finished!
+Inference finished!
 Generating grids...
 ✔ Saved vis_results_final/summary_success.jpg
 ✔ Saved vis_results_final/summary_failure.jpg
 
-📊 Summary saved to vis_results_final/results_summary.csv
+Summary saved to vis_results_final/results_summary.csv
 
 Images saved under: vis_results_final/success/ and vis_results_final/failure/
-🎯 DONE!
+DONE!

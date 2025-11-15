@@ -163,18 +163,12 @@ class ResizeShortSide:
 train_aug = tv.transforms.Compose([
     tv.transforms.RandomHorizontalFlip(0.5),
 
-    # 轻量级颜色增强（不会拖慢 CPU）
     tv.transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
 
-    # 减少 CPU 压力的版本（比 AdjustSharpness / Equalize 更快）
     tv.transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 1.0)),
 
-    # 随机擦除（在 GPU 上不会报 dtype 错）
     tv.transforms.RandomErasing(p=0.1)
 ])
-
-
-
 
 # ---------------------
 # mAP@0.50
@@ -372,18 +366,18 @@ def train_one_epoch(model, loader, optimizer, device, epoch, grad_accum, lr_sche
 # ---------------------
 @torch.no_grad()
 def eval_loss(model, loader, device):
-    model.train()     # ← 必须切到 train 才能得到 loss_dict
+    model.train()    
     total = 0
 
     for images, targets in loader:
         images = [img.to(device) for img in images]
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-        loss_dict = model(images, targets)   # ← 此时才能得到 dict
+        loss_dict = model(images, targets)  
         loss = sum(loss_dict.values()).item()
         total += loss
 
-    model.eval()     # 恢复模式
+    model.eval()    
     return total / max(1, len(loader))
 
 
@@ -485,7 +479,6 @@ def main():
         "pin_memory": (device.type == "cuda"),
     }
 
-    # workers > 0 才允许 prefetch/persistent_workers
     if args.workers > 0:
         loader_settings["prefetch_factor"] = 2
         loader_settings["persistent_workers"] = True

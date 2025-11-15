@@ -1,173 +1,138 @@
-# COMP9517 Computer Vision Group Project (2025 T3)
+# RetinaNet Detection Pipeline — Summary README
+
+This repository provides a complete RetinaNet-based object detection pipeline for datasets formatted in YOLO TXT annotations. It includes training, validation, testing, visualization, and metric reporting, producing structured logs, CSV files, and diagnostic figures.
+
+---
+
+## Project Structure
 
 ```
-COMP9517_group_project/
+project/
 │
-├─ data.yaml                        # 数据集配置文件（见下方示例）
+├── retinanet_train_full_final.py      # Full-feature RetinaNet training script
+├── retinanet_train_final.py           # Lightweight training variant
+├── test_retinanet_final.py            # Test/evaluation script
+├── visualize_retinanet_final.py       # Detection visualization script
 │
-├─ retinanet_train.py               # 主训练脚本（当前使用的即可）
-├─ retinanet_test.py                # 测试脚本（当前使用的即可）
-├─ visualize_retinanet.py           # 可视化脚本（生成 success/failure 图）
+├── dataset/
+│   ├── train/
+│   │   ├── images/
+│   │   └── labels/
+│   ├── valid/
+│   │   ├── images/
+│   │   └── labels/
+│   └── test/
+│       ├── images/
+│       └── labels/
 │
-├─ outputs_retinanet/               # 模型输出文件夹
-│    ├─ best.pth
-│    ├─ ckpt_epochX.pth
-│    ├─ results_summary.csv
-│    └─ ...
+├── outputs_retinanet_final/
+│   ├── best.pth
+│   ├── last.pth
+│   ├── training_log.csv
+│   ├── loss_curve.png
+│   ├── map_curve.png
+│   ├── pr_curve.png
 │
-└─ dataset/
-     ├─ train/
-     │   ├─ images/
-     │   └─ labels/
-     ├─ valid/
-     │   ├─ images/
-     │   └─ labels/
-     └─ test/
-         ├─ images/
-         └─ labels/
+└── outputs_retinanet_test/
+    ├── class_results.csv
+    ├── per_class_map.png
 
-```   
-operation :
+└── vis_results_final/
+    ├── success/
+    ├── failure/
+    ├── summary_success.jpg
+    ├── summary_failure.jpg
+    └── results_summary.csv
+```
 
-python retinanet_train_final.py --train-images dataset/train/images --train-labels dataset/train/labels --val-images dataset/valid/images --val-labels dataset/valid/labels --num-classes 12 --epochs 20 --batch-size 3 --workers 8 --lr 0.002 --amp
+---
 
-python test_retinanet_final.py --ckpt outputs_retinanet_final/best.pth --test-images dataset/test/images --test-labels dataset/test/labels --num-classes 12
+## Dataset Format (YOLO TXT)
 
+Each label file:
 
+```
+class center_x center_y width height
+```
+
+All values are normalized to 0–1.
+
+---
+
+## Installation
+
+```
+pip install torch torchvision numpy pillow pandas scikit-learn matplotlib
+```
+
+---
+
+## Training
+
+Run:
+
+```
+python retinanet_train_full_final.py   --train-images dataset/train/images   --train-labels dataset/train/labels   --val-images dataset/valid/images   --val-labels dataset/valid/labels   --num-classes 12   --epochs 20   --batch-size 3   --workers 8   --lr 0.002   --amp
+```
+
+### Training Outputs (auto-generated)
+
+- best.pth  
+- last.pth  
+- training_log.csv  
+- loss_curve.png  
+- map_curve.png  
+- pr_curve.png  
+
+---
+
+## Testing
+
+Run:
+
+```
+python test_retinanet_final.py   --ckpt outputs_retinanet_final/best.pth   --test-images dataset/test/images   --test-labels dataset/test/labels   --num-classes 12
+```
+
+### Console Summary Includes
+
+- mAP@50  
+- mAP@50–95  
+- Detection precision & recall  
+- Classification precision, recall, F1  
+- Classification accuracy  
+- ROC-AUC  
+- Evaluation time  
+
+### Test Output Files
+
+Located in `outputs_retinanet_test/`:
+
+- class_results.csv  
+- per_class_map.png  
+
+---
+
+## Visualization
+
+Run:
+
+```
 python visualize_retinanet_final.py
-
-## 🪲 Insect Detection & Classification in Agriculture  
-**Models:** RetinaNet • Faster R‑CNN • YOLO (or other CV methods your group chooses)
-
-This repository contains our code submission for the COMP9517 Group Project (Term 3, 2025).  
-The task is to detect and classify agricultural pest insects from the **AgroPest‑12** dataset.
-
----
-
-## 📂 Dataset
-
-**Dataset:** AgroPest‑12 (Kaggle)  
-**Classes:** 12 agricultural insect categories  
-**Images:** 11,502 train / 1,095 val / 546 test  
-**Labels:** Bounding boxes + class labels  
-
-Dataset link:  
-https://www.kaggle.com/datasets/rupankarmajumdar/crop-pests-dataset
-
-> ⚠️ Dataset is **not included in this repo** due to size & submission rules.  
-Please download manually and update local paths as needed.
-
----
-
-## 🎯 Project Objectives
-
-- Detect & classify insects in natural agricultural environments  
-- Develop **at least 2 full detection pipelines** (detector + classifier)  
-- Compare traditional, ML, and/or deep learning approaches  
-- Evaluate robustness, speed, accuracy, and sensitivity to imbalance  
-- Follow COMP9517 academic & coding guidelines  
-
----
-
-## 🧠 Methods Overview
-
-| Method | Detector | Notes |
-|---|---|---|
-| **Method 1** | e.g., Faster R‑CNN | Two‑stage baseline |
-| **Method 2** | e.g., RetinaNet | One‑stage baseline |
-| **Optional** | YOLO / SSD / Vision Transformer | For improvements & comparison |
-| **Optional** | Classical + feature descriptors (SIFT/HOG + SVM) | For bonus diversity |
-
-> Models and approaches will be updated as the project progresses.
-
----
-
-## ⚙️ Environment & Dependencies
-
-```
-Python >= 3.9
-PyTorch >= 1.12
-torchvision >= 0.13
-CUDA (optional but recommended)
 ```
 
-Install dependencies (if requirements.txt is provided later):
+### Visualization Outputs
 
-```
-pip install -r requirements.txt
-```
+Located in `vis_results_final/`:
 
----
-
-## 🚀 Training Example
-
-Example (custom parameters inside script):
-
-```bash
-python retinanet_train.py --epochs 50 --batch-size 8
-```
-
-> Replace with your script if name changes.
+- success/  
+- failure/  
+- summary_success.jpg  
+- summary_failure.jpg  
+- results_summary.csv  
 
 ---
 
-## 📦 Files Included
+## Summary
 
-| File | Description |
-|---|---|
-| `retinanet_train.py` | RetinaNet training script |
-| `data.yaml` | Dataset config file |
-| `.gitignore` | Prevents dataset & weights from being committed |
-
-**Not included** (per assignment rules):  
-❌ Dataset  
-❌ Trained weights  
-❌ Output visualizations  
-
----
-
-## 📊 Evaluation Metrics
-
-- **mAP** (mean average precision) — detection performance  
-- **Precision / Recall / F1** — classification  
-- **AUC**
-- **Inference & training time** comparisons  
-
----
-
-## 🎥 Video + 📄 Report
-
-Deliverables include:
-
-- **10‑minute video presentation** (with live demo segment)
-- **IEEE‑format report (max 10 pages)**
-
----
-
-## 👥 Group Members
-
-| Name | zID |
-|---|---|
-| Member 1 | z5xxxxx |
-| Member 2 | z5xxxxx |
-| Member 3 | z5xxxxx |
-| Member 4 | z5xxxxx |
-| Member 5 | z5xxxxx |
-
-*(To be updated)*
-
----
-
-## 📎 Acknowledgements
-
-- UNSW COMP9517 Teaching Team  
-- PyTorch / Torchvision  
-- Kaggle dataset authors  
-
----
-
-## 📜 License
-
-For academic use only.  
-COMP9517 submission – redistribution prohibited.
-
+This repository provides a full RetinaNet workflow including training, evaluation, metric reporting, per-class analysis, and visualization. It supports YOLO TXT datasets and produces structured logs and figures suitable for research and experimentation.

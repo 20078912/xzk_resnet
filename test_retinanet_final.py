@@ -13,18 +13,17 @@ from sklearn.metrics import (
 )
 from torchvision.ops import box_iou
 
-# 从训练文件导入所有稳定模块
 from retinanet_train_final import (
     build_retinanet,
     YoloTxtWrapper,
     ResizeShortSide,
     collate_fn,
-    evaluate,            # ⭐ 使用训练版本 evaluate() 计算 detection 指标
+    evaluate,           
     set_seed
 )
 
 # -----------------------
-# 匹配 TP 用于分类指标
+# match TP
 # -----------------------
 def match_tp_pairs(pred, gt, iou_thr=0.5):
     pb, ps, pl = pred["boxes"], pred["scores"], pred["labels"]
@@ -187,9 +186,9 @@ def main():
 
     plt.figure(figsize=(14, 7))
     plt.bar(df["class_name"], df["AP50"])
-    plt.xticks(df["class_name"], rotation=45, ha="right")  # 强制使用类别名
-    plt.xlabel("Class Name")  # 可选
-    plt.ylabel("AP@50")        # 可选
+    plt.xticks(df["class_name"], rotation=45, ha="right")  
+    plt.xlabel("Class Name")  
+    plt.ylabel("AP@50")        
     plt.title("Per-class AP@0.50")
     plt.tight_layout()
     plt.savefig(os.path.join(args.out_dir, "per_class_map.png"), dpi=300)

@@ -1,5 +1,6 @@
 # visualize_retinanet_final.py
-# 完整可视化：成功/失败样本、框、类别名、per-class grid、CSV统计
+# Full visualization: success/failure samples, bounding boxes, class names,
+# per-class grids, and CSV statistics.
 
 import os
 import shutil
@@ -21,7 +22,7 @@ from retinanet_train_final import (
 )
 
 # ----------------------------
-# 用户可调参数
+# User parameters
 # ----------------------------
 CKPT = "outputs_retinanet_final/best.pth"
 TEST_IMG = "dataset/test/images"
@@ -35,7 +36,7 @@ IOU_THR = 0.5
 PER_CLASS = 3
 MAX_BOX_PER_IMG = 5
 
-# 类别名（和训练一致）
+# Class names (same as training)
 CLASS_NAMES = [
     "ant","bee","beetle","butterfly","caterpillar","dragonfly",
     "fly","grasshopper","mosquito","moth","spider","wasp"
@@ -43,7 +44,7 @@ CLASS_NAMES = [
 
 
 # ----------------------------
-# 自定义 IoU（与旧版本对齐）
+# Local IoU (aligned with older version)
 # ----------------------------
 def box_iou_local(box1, box2):
     if len(box1) == 0 or len(box2) == 0:
@@ -65,7 +66,7 @@ def box_iou_local(box1, box2):
 
 
 # ----------------------------
-# 自动检测 test labels 里的类别
+# Infer available class IDs from test labels
 # ----------------------------
 def infer_class_ids(labels_dir):
     ids = set()
@@ -79,30 +80,30 @@ def infer_class_ids(labels_dir):
 
 
 # ----------------------------
-# 主流程
+# Main
 # ----------------------------
 def main():
     set_seed(42)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # 类别 ID
+    # Infer class IDs
     REAL_CLASS_IDS = infer_class_ids(TEST_LBL)
     ID2NAME = {i: CLASS_NAMES[i] for i in REAL_CLASS_IDS}
 
-    # 创建输出目录
+    # Prepare output directories
     if os.path.exists(OUT_DIR):
         shutil.rmtree(OUT_DIR)
     os.makedirs(f"{OUT_DIR}/success", exist_ok=True)
     os.makedirs(f"{OUT_DIR}/failure", exist_ok=True)
 
-    # 载入模型
-    print("⚡ Loading model...")
+    # Load model
+    print("Loading model...")
     model = build_retinanet(num_classes=NUM_CLASSES).to(device)
     ckpt = torch.load(CKPT, map_location="cpu")
     model.load_state_dict(ckpt["model"], strict=False)
     model.eval()
 
-    # dataset
+    # Build dataset
     resize = ResizeShortSide(800, 1333)
     ds = YoloTxtWrapper(TEST_IMG, TEST_LBL, transforms=resize, num_classes=NUM_CLASSES)
 
@@ -111,7 +112,7 @@ def main():
     success_count = np.zeros(NUM_CLASSES)
     total_count = np.zeros(NUM_CLASSES)
 
-    print(f"🔍 Processing {len(ds)} images...")
+    print(f"Processing {len(ds)} images...")
 
     for idx in range(len(ds)):
         if idx % 50 == 0:
@@ -121,7 +122,7 @@ def main():
         img_vis = (img * 255).byte()
         img_t = img.unsqueeze(0).to(device)
 
-        # 推理
+        # Inference
         with torch.no_grad():
             pred = model(img_t)[0]
 
@@ -129,13 +130,13 @@ def main():
         scores = pred["scores"].cpu()
         labels = pred["labels"].cpu()
 
-        # 过滤低分
+        # Filter by score threshold
         keep = scores >= CONF_THRESH
         boxes = boxes[keep]
         scores = scores[keep]
         labels = labels[keep]
 
-        # NMS
+        # NMS + validity check
         if len(boxes) > 0:
             valid = (boxes[:, 2] > boxes[:, 0]) & (boxes[:, 3] > boxes[:, 1])
             boxes = boxes[valid]
@@ -152,20 +153,20 @@ def main():
         gtb = gt["boxes"]
         gtl = gt["labels"]
 
-        # IoU 计算
+        # IoU check
         max_iou = 0
         if len(boxes) > 0 and len(gtb) > 0:
             max_iou = float(box_iou_local(boxes, gtb).max())
 
         is_success = max_iou >= IOU_THR
 
-        # 统计 per-class
+        # Per-class statistics
         for cls in gtl.tolist():
             total_count[cls] += 1
             if is_success:
                 success_count[cls] += 1
 
-        # 可视化
+        # Draw visualization
         label_text = [f"{ID2NAME[int(l)]} {float(s):.2f}" for l, s in zip(labels, scores)]
 
         if len(boxes) > 0:
@@ -179,22 +180,22 @@ def main():
         tag = "success" if is_success else "failure"
         img_pil.save(f"{OUT_DIR}/{tag}/{fname}.jpg")
 
-        # 收集 per-class 示例图
+        # Collect examples for class grids
         for cls in gtl.tolist():
             if is_success and len(success_per_class[cls]) < PER_CLASS:
                 success_per_class[cls].append(img_pil.copy())
             elif not is_success and len(failure_per_class[cls]) < PER_CLASS:
                 failure_per_class[cls].append(img_pil.copy())
 
-    print("🎉 Inference finished!\nGenerating grids...")
+    print("Inference complete. Generating grids...")
 
     # ----------------------------
-    # 拼接 per-class 图
+    # Build per-class grids
     # ----------------------------
     def make_grid(class_dict, title, outfile):
         valid = {k: v for k, v in class_dict.items() if len(v) > 0}
         if not valid:
-            print(f"⚠ No samples for {title}")
+            print(f"No samples for {title}")
             return
 
         rows = len(valid)
@@ -217,13 +218,13 @@ def main():
         plt.savefig(outfile, dpi=200)
         plt.close()
 
-        print(f"✔ Saved {outfile}")
+        print(f"Saved {outfile}")
 
     make_grid(success_per_class, "Success Samples", f"{OUT_DIR}/summary_success.jpg")
     make_grid(failure_per_class, "Failure Samples", f"{OUT_DIR}/summary_failure.jpg")
 
     # ----------------------------
-    # 保存 per-class 成功率 CSV
+    # Save per-class accuracy CSV
     # ----------------------------
     csv_path = f"{OUT_DIR}/results_summary.csv"
     with open(csv_path, "w", newline="") as f:
@@ -235,9 +236,9 @@ def main():
             acc = s / t * 100 if t > 0 else 0
             w.writerow([CLASS_NAMES[cls], t, s, f"{acc:.1f}"])
 
-    print(f"\n📊 Summary saved to {csv_path}")
-    print(f"\nImages saved under: {OUT_DIR}/success/ and {OUT_DIR}/failure/")
-    print("🎯 DONE!")
+    print(f"Summary saved to {csv_path}")
+    print(f"Images saved under: {OUT_DIR}/success/ and {OUT_DIR}/failure/")
+    print("DONE!")
 
 
 if __name__ == "__main__":
