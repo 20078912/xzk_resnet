@@ -1,4 +1,4 @@
-# test_retinanet.py — final Test 评估 + 可视化增强
+# test_retinanet.py — final Test 评估 + 可视化增强（带类别名称）
 import argparse, time, os, numpy as np, torch, torch.utils.data as data, torchvision as tv
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -140,12 +140,19 @@ def main():
     print(f"ROC-AUC (ovr):     {AUC:.4f}")
     print(f"Eval time:         {test_time:.2f}s\n")
 
+    # === 定义类别名称 ===
+    CLASS_NAMES = [
+        "ant", "bee", "beetle", "butterfly", "caterpillar", "dragonfly",
+        "fly", "grasshopper", "mosquito", "moth", "spider", "wasp"
+    ][:args.num_classes]
+
     # === 每类结果导出 ===
     class_ids = list(range(args.num_classes))
     ap_list = [ap_per_class.get(c, 0.0) for c in class_ids]
 
     df = pd.DataFrame({
         "class_id": class_ids,
+        "class_name": CLASS_NAMES,
         "AP50": ap_list
     })
 
@@ -168,11 +175,11 @@ def main():
 
     # === 绘制 per-class AP 柱状图 ===
     plt.figure(figsize=(10, 5))
-    plt.bar(df["class_id"], df["AP50"], color="skyblue")
-    plt.xlabel("Class ID"); plt.ylabel("AP@0.5")
+    plt.bar(df["class_name"], df["AP50"], color="skyblue")
+    plt.xlabel("Class"); plt.ylabel("AP@0.5")
     plt.title("Per-Class Average Precision (AP50)")
     plt.grid(axis='y', linestyle='--', alpha=0.6)
-    plt.xticks(df["class_id"])
+    plt.xticks(rotation=45, ha='right')  # ✅ 显示实际类别名称
     plt.tight_layout()
     fig_path = os.path.join(args.out_dir, "per_class_map.png")
     plt.savefig(fig_path, dpi=300)
