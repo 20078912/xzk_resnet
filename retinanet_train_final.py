@@ -157,13 +157,24 @@ class ResizeShortSide:
         return tv.transforms.functional.resize(img, [newH, newW])
 
 
+# ---------------------
+# Data Augmentation (Fast & Safe)
+# ---------------------
 train_aug = tv.transforms.Compose([
     tv.transforms.RandomHorizontalFlip(0.5),
-    tv.transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.05),
-    tv.transforms.RandomAdjustSharpness(sharpness_factor=2, p=0.3),
-    tv.transforms.RandomAutocontrast(p=0.3),
-    tv.transforms.RandomEqualize(p=0.3),
+
+    # 轻量级颜色增强（不会拖慢 CPU）
+    tv.transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+
+    # 减少 CPU 压力的版本（比 AdjustSharpness / Equalize 更快）
+    tv.transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 1.0)),
+
+    # 随机擦除（在 GPU 上不会报 dtype 错）
+    tv.transforms.RandomErasing(p=0.1)
 ])
+
+
+
 
 # ---------------------
 # mAP@0.50

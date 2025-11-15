@@ -26,7 +26,15 @@ COMP9517_group_project/
          ├─ images/
          └─ labels/
 
-```       
+```   
+operation :
+
+python retinanet_train_final.py --train-images dataset/train/images --train-labels dataset/train/labels --val-images dataset/valid/images --val-labels dataset/valid/labels --num-classes 12 --epochs 20 --batch-size 3 --workers 8 --lr 0.002 --amp
+
+python test_retinanet_final.py --ckpt outputs_retinanet_final/best.pth --test-images dataset/test/images --test-labels dataset/test/labels --num-classes 12
+
+
+python visualize_retinanet_final.py
 
 ## 🪲 Insect Detection & Classification in Agriculture  
 **Models:** RetinaNet • Faster R‑CNN • YOLO (or other CV methods your group chooses)
