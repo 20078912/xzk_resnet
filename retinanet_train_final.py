@@ -158,8 +158,13 @@ class ResizeShortSide:
 
 
 train_aug = tv.transforms.Compose([
-    tv.transforms.RandomHorizontalFlip(0.5)
+    tv.transforms.RandomHorizontalFlip(0.5),
+    tv.transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.05),
+    tv.transforms.RandomAdjustSharpness(sharpness_factor=2, p=0.3),
+    tv.transforms.RandomAutocontrast(p=0.3),
+    tv.transforms.RandomEqualize(p=0.3),
 ])
+
 # ---------------------
 # mAP@0.50
 # ---------------------
@@ -356,31 +361,20 @@ def train_one_epoch(model, loader, optimizer, device, epoch, grad_accum, lr_sche
 # ---------------------
 @torch.no_grad()
 def eval_loss(model, loader, device):
-    model.eval()
+    model.train()     # ← 必须切到 train 才能得到 loss_dict
     total = 0
-    count = 0
 
     for images, targets in loader:
         images = [img.to(device) for img in images]
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-        out = model(images, targets)
-
-        # Case 1: Normal dictionary output
-        if isinstance(out, dict):
-            loss = sum(out.values()).item()
-
-        # Case 2: Some images have NO GT → model returns a LIST → treat loss as ZERO
-        elif isinstance(out, list):
-            loss = 0.0
-
-        else:
-            loss = 0.0
-
+        loss_dict = model(images, targets)   # ← 此时才能得到 dict
+        loss = sum(loss_dict.values()).item()
         total += loss
-        count += 1
 
-    return total / max(1, count)
+    model.eval()     # 恢复模式
+    return total / max(1, len(loader))
+
 
 # ---------------------
 # Evaluate
